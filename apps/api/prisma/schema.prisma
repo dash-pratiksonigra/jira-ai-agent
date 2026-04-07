@@ -1,0 +1,92 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model JiraConnection {
+  id        String   @id
+  name      String
+  baseUrl   String
+  email     String
+  secret    Secret?  @relation(fields: [secretId], references: [id])
+  secretId  String?  @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  agentConfigs AgentConfig[]
+}
+
+model AgentConfig {
+  id                 String   @id
+  name               String
+  enabled            Boolean  @default(false)
+  jiraConnectionId   String
+  jiraConnection     JiraConnection @relation(fields: [jiraConnectionId], references: [id])
+
+  jql                String
+  pollIntervalSeconds Int      @default(120)
+
+  workflowMappingJson String
+  claimingPolicyJson  String
+  toolPolicyJson      String
+  llmPolicyJson       String
+  safetyPolicyJson    String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  runs Run[]
+}
+
+model Run {
+  id            String   @id
+  agentConfigId String
+  agentConfig   AgentConfig @relation(fields: [agentConfigId], references: [id])
+  startedAt     DateTime @default(now())
+  finishedAt    DateTime?
+  status        String
+  summary       String?
+
+  issueRuns IssueRun[]
+  auditEvents AuditEvent[]
+}
+
+model IssueRun {
+  id         String   @id
+  runId      String
+  run        Run      @relation(fields: [runId], references: [id])
+  issueKey   String
+  claimedAt  DateTime?
+  finishedAt DateTime?
+  status     String
+  prUrl      String?
+  lastError  String?
+
+  auditEvents AuditEvent[]
+}
+
+model AuditEvent {
+  id         String   @id
+  runId      String?
+  run        Run?     @relation(fields: [runId], references: [id])
+  issueRunId String?
+  issueRun   IssueRun? @relation(fields: [issueRunId], references: [id])
+  at         DateTime @default(now())
+  actor      String
+  actionType String
+  payloadJson String
+}
+
+model Secret {
+  id         String   @id
+  kind       String
+  ciphertext String
+  createdAt  DateTime @default(now())
+
+  jiraConnection JiraConnection?
+}
+

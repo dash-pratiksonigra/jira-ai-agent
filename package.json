@@ -1,0 +1,15 @@
+{
+  "name": "ratifai-jira-integration",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run -ws dev",
+    "build": "npm run -w packages/shared build && npm run -w apps/api build && npm run -w apps/worker build && npm run -w apps/ui build",
+    "lint": "npm run -w packages/shared lint && npm run -w apps/api lint && npm run -w apps/worker lint && npm run -w apps/ui lint",
+    "typecheck": "npm run -w packages/shared typecheck && npm run -w apps/api typecheck && npm run -w apps/worker typecheck && npm run -w apps/ui typecheck"
+  }
+}
+
