@@ -24,6 +24,7 @@ const EnvSchema = z.object({
   ATLASSIAN_CLOUD_ID_OR_SITE_URL: z.string().min(1).optional(),
   REPO_ROOT: z.string().min(1).optional(),
   RUN_TESTS_COMMAND: z.string().min(1).optional(),
+  GH_PATH: z.string().min(1).optional(),
   PR_BASE_BRANCH: z.string().min(1).default("develop"),
   PR_REMOTE: z.string().min(1).default("origin"),
   ANTHROPIC_API_KEY: z.string().min(1).optional(),

@@ -17,7 +17,8 @@ export class RepoClient {
   }
 
   async gh(args: string[], opts?: { timeoutMs?: number }) {
-    return await this.run("gh", args, opts);
+    const ghPath = process.env.GH_PATH || "gh";
+    return await this.run(ghPath, args, opts);
   }
 }
 
