@@ -19,6 +19,11 @@ export class CodeChangeRunner {
     this.repo = new RepoClient({ cwd: opts.repoRoot });
   }
 
+  private async currentBranch(): Promise<string> {
+    const { stdout } = await this.repo.git(["rev-parse", "--abbrev-ref", "HEAD"]);
+    return stdout.trim();
+  }
+
   async ensureCleanOrThrow() {
     const { stdout } = await this.repo.git(["status", "--porcelain"]);
     if (stdout.trim()) throw new Error("Working tree not clean. Commit/stash changes before running the worker.");
@@ -61,7 +66,17 @@ export class CodeChangeRunner {
 
   async commitAll(issueKey: string) {
     await this.repo.git(["add", "-A"]);
-    await this.repo.git(["commit", "-m", `feat: ${issueKey} (agent)`]);
+    try {
+      await this.repo.git(["commit", "-m", `feat: ${issueKey} (agent)`]);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      // If there is nothing to commit, create an empty commit so PR creation has a diff.
+      if (msg.includes("nothing to commit") || msg.includes("working tree clean")) {
+        await this.repo.git(["commit", "--allow-empty", "-m", `chore: ${issueKey} (agent)`]);
+      } else {
+        throw e;
+      }
+    }
     const { stdout } = await this.repo.git(["rev-parse", "HEAD"]);
     return stdout.trim();
   }
@@ -79,22 +94,27 @@ export class CodeChangeRunner {
     await this.repo.gh(["--version"], { timeoutMs: 20_000 });
     await this.repo.git(["push", "-u", remote, "HEAD"]);
 
+    const headBranch = await this.currentBranch();
+    // Ensure we never try to PR from the base branch itself.
+    if (headBranch === baseBranch) {
+      throw new Error(`Refusing to create PR from base branch '${baseBranch}'.`);
+    }
+
     const { stdout: prUrl } = await this.repo.gh([
       "pr",
       "create",
       "--base",
       baseBranch,
       "--head",
-      "HEAD",
+      headBranch,
       "--title",
       params.title,
       "--body",
       params.body
     ]);
 
-    const { stdout: branchStdout } = await this.repo.git(["rev-parse", "--abbrev-ref", "HEAD"]);
     const { stdout: shaStdout } = await this.repo.git(["rev-parse", "HEAD"]);
-    return { prUrl: prUrl.trim(), branch: branchStdout.trim(), commitSha: shaStdout.trim() };
+    return { prUrl: prUrl.trim(), branch: headBranch, commitSha: shaStdout.trim() };
   }
 }
 
