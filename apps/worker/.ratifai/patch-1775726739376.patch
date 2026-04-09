@@ -1,0 +1,273 @@
+diff --git a/src/components/Login.jsx b/src/components/Login.jsx
+new file mode 100644
+index 0000000..1a2b3c4
+--- /dev/null
++++ b/src/components/Login.jsx
+@@ -0,0 +1,79 @@
++import React, { useState } from 'react';
++import { useNavigate } from 'react-router-dom';
++import { useAuth } from '../context/AuthContext';
++
++const Login = () => {
++  const [email, setEmail] = useState('');
++  const [password, setPassword] = useState('');
++  const [error, setError] = useState('');
++  const [loading, setLoading] = useState(false);
++  const { login } = useAuth();
++  const navigate = useNavigate();
++
++  const handleSubmit = async (e) => {
++    e.preventDefault();
++    setError('');
++    setLoading(true);
++    try {
++      await login(email, password);
++      navigate('/dashboard');
++    } catch (err) {
++      setError(err.message || 'Invalid email or password. Please try again.');
++    } finally {
++      setLoading(false);
++    }
++  };
++
++  return (
++    <div className="login-container">
++      <div className="login-card">
++        <h1>Sign In</h1>
++        <form onSubmit={handleSubmit} noValidate>
++          {error && (
++            <div className="error-message" role="alert">
++              {error}
++            </div>
++          )}
++          <div className="form-group">
++            <label htmlFor="email">Email</label>
++            <input
++              id="email"
++              type="email"
++              value={email}
++              onChange={(e) => setEmail(e.target.value)}
++              placeholder="Enter your email"
++              required
++              autoComplete="email"
++            />
++          </div>
++          <div className="form-group">
++            <label htmlFor="password">Password</label>
++            <input
++              id="password"
++              type="password"
++              value={password}
++              onChange={(e) => setPassword(e.target.value)}
++              placeholder="Enter your password"
++              required
++              autoComplete="current-password"
++            />
++          </div>
++          <button type="submit" disabled={loading} className="login-button">
++            {loading ? 'Signing in...' : 'Login'}
++          </button>
++        </form>
++      </div>
++    </div>
++  );
++};
++
++export default Login;
+diff --git a/src/components/Dashboard.jsx b/src/components/Dashboard.jsx
+new file mode 100644
+index 0000000..2b3c4d5
+--- /dev/null
++++ b/src/components/Dashboard.jsx
+@@ -0,0 +1,30 @@
++import React from 'react';
++import { useNavigate } from 'react-router-dom';
++import { useAuth } from '../context/AuthContext';
++
++const Dashboard = () => {
++  const { user, logout } = useAuth();
++  const navigate = useNavigate();
++
++  const handleLogout = () => {
++    if (window.confirm('Are you sure you want to log out?')) {
++      logout();
++      navigate('/login');
++    }
++  };
++
++  return (
++    <div className="dashboard-container">
++      <header className="dashboard-header">
++        <h1>Dashboard</h1>
++        <button onClick={handleLogout} className="logout-button">
++          Logout
++        </button>
++      </header>
++      <main>
++        <p>Welcome{user?.email ? `, ${user.email}` : ''}!</p>
++      </main>
++    </div>
++  );
++};
++
++export default Dashboard;
+diff --git a/src/components/ProtectedRoute.jsx b/src/components/ProtectedRoute.jsx
+new file mode 100644
+index 0000000..3c4d5e6
+--- /dev/null
++++ b/src/components/ProtectedRoute.jsx
+@@ -0,0 +1,14 @@
++import React from 'react';
++import { Navigate } from 'react-router-dom';
++import { useAuth } from '../context/AuthContext';
++
++const ProtectedRoute = ({ children }) => {
++  const { user } = useAuth();
++
++  if (!user) {
++    return <Navigate to="/login" replace />;
++  }
++
++  return children;
++};
++
++export default ProtectedRoute;
+diff --git a/src/context/AuthContext.jsx b/src/context/AuthContext.jsx
+new file mode 100644
+index 0000000..4d5e6f7
+--- /dev/null
++++ b/src/context/AuthContext.jsx
+@@ -0,0 +1,60 @@
++import React, { createContext, useContext, useState, useEffect } from 'react';
++
++const AuthContext = createContext(null);
++
++const SESSION_KEY = 'auth_user';
++
++export const AuthProvider = ({ children }) => {
++  const [user, setUser] = useState(() => {
++    try {
++      const stored = sessionStorage.getItem(SESSION_KEY);
++      return stored ? JSON.parse(stored) : null;
++    } catch {
++      return null;
++    }
++  });
++
++  useEffect(() => {
++    if (user) {
++      sessionStorage.setItem(SESSION_KEY, JSON.stringify(user));
++    } else {
++      sessionStorage.removeItem(SESSION_KEY);
++    }
++  }, [user]);
++
++  const login = async (email, password) => {
++    if (!email || !password) {
++      throw new Error('Email and password are required.');
++    }
++
++    // Replace this block with a real API call, e.g.:
++    // const response = await fetch('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
++    // if (!response.ok) throw new Error('Invalid email or password.');
++    // const data = await response.json();
++    // setUser(data.user);
++
++    // Stub: treat any non-empty credentials as valid for demonstration
++    const stubValidEmail = 'user@example.com';
++    const stubValidPassword = 'password';
++    if (email !== stubValidEmail || password !== stubValidPassword) {
++      throw new Error('Invalid email or password. Please try again.');
++    }
++
++    const authenticatedUser = { email };
++    setUser(authenticatedUser);
++    return authenticatedUser;
++  };
++
++  const logout = () => {
++    setUser(null);
++  };
++
++  return (
++    <AuthContext.Provider value={{ user, login, logout }}>
++      {children}
++    </AuthContext.Provider>
++  );
++};
++
++export const useAuth = () => {
++  const context = useContext(AuthContext);
++  if (!context) {
++    throw new Error('useAuth must be used within an AuthProvider');
++  }
++  return context;
++};
++
++export default AuthContext;
+diff --git a/src/App.jsx b/src/App.jsx
+new file mode 100644
+index 0000000..5e6f7a8
+--- /dev/null
++++ b/src/App.jsx
+@@ -0,0 +1,26 @@
++import React from 'react';
++import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
++import { AuthProvider } from './context/AuthContext';
++import Login from './components/Login';
++import Dashboard from './components/Dashboard';
++import ProtectedRoute from './components/ProtectedRoute';
++
++const App = () => {
++  return (
++    <BrowserRouter>
++      <AuthProvider>
++        <Routes>
++          <Route path="/login" element={<Login />} />
++          <Route
++            path="/dashboard"
++            element={
++              <ProtectedRoute>
++                <Dashboard />
++              </ProtectedRoute>
++            }
++          />
++          <Route path="*" element={<Navigate to="/login" replace />} />
++        </Routes>
++      </AuthProvider>
++    </BrowserRouter>
++  );
++};
++
++export default App;
+diff --git a/src/App.css b/src/App.css
+new file mode 100644
+index 0000000..6f7a8b9
+--- /dev/null
++++ b/src/App.css
+@@ -0,0 +1,85 @@
++/* Login */
++.login-container {
++  display: flex;
++  align-items: center;
++  justify-content: center;
++  min-height: 100vh;
++  background-color: #f0f2f5;
++}
++
++.login-card {
++  background: #ffffff;
++  padding: 2rem;
++  border-radius: 8px;
++  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
++  width: 100%;
++  max-width: 400px;
++}
++
++.login-card h1 {
++  margin-bottom: 1.5rem;
++  font-size: 1.5rem;
++  text-align: center;
++}
++
++.form
