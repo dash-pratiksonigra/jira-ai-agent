@@ -36,6 +36,30 @@ Create `apps/worker/.env`:
 ```bash
 API_BASE_URL="http://localhost:3001"
 POLL_INTERVAL_SECONDS=120
+
+# Atlassian Jira MCP (preferred)
+ATLASSIAN_MCP_URL="https://mcp.atlassian.com/v1/mcp"
+ATLASSIAN_CLOUD_ID_OR_SITE_URL="https://your-domain.atlassian.net"
+
+# If Atlassian MCP returns "invalid_token", configure auth headers (JSON string).
+# Use ONE of:
+# - Personal API token (Basic): Authorization: Basic base64(email:api_token)
+# - Service account API key (Bearer): Authorization: Bearer <api_key>
+# ATLASSIAN_MCP_HEADERS_JSON='{"Authorization":"Basic BASE64_ENCODED_EMAIL_AND_TOKEN"}'
+# ATLASSIAN_MCP_HEADERS_JSON='{"Authorization":"Bearer YOUR_SERVICE_ACCOUNT_API_KEY"}'
+
+# If API-token auth doesn't expose Jira tools in the worker, use OAuth 2.1:
+# ATLASSIAN_MCP_USE_OAUTH=true
+# ATLASSIAN_MCP_OAUTH_CACHE_PATH="apps/worker/.atlassian-mcp-oauth.json"
+# ATLASSIAN_MCP_OAUTH_REDIRECT_URL="http://127.0.0.1:3344/callback"
+# Then run once:
+#   node "apps/worker/dist/mcpOauthLogin.js"
+
+# Code changes + PR automation (optional)
+# REPO_ROOT="C:/Users/PratikSonigra/Projects/RATIFAI Jira Integration"
+PR_BASE_BRANCH="develop"
+PR_REMOTE="origin"
+# RUN_TESTS_COMMAND="npm test"
 ```
 
 ### Database

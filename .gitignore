@@ -20,6 +20,10 @@ pnpm-debug.log*
 .env.*
 !.env.example
 
+## OAuth token caches (never commit)
+.atlassian-mcp-oauth.json
+**/.atlassian-mcp-oauth.json
+
 ## local data / databases
 data/*.db
 data/**/*.db

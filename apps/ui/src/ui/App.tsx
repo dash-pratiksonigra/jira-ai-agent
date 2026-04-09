@@ -322,7 +322,23 @@ export function App() {
               <label>Web research</label>
               <select
                 value={String(agentForm.toolPolicy.allowWebResearch)}
-                onChange={(e) => setAgentForm({ ...agentForm, toolPolicy: { ...agentForm.toolPolicy, allowWebResearch: e.target.value === "true" } })}
+                onChange={(e) => {
+                  isAgentDirtyRef.current = true;
+                  setAgentForm({ ...agentForm, toolPolicy: { ...agentForm.toolPolicy, allowWebResearch: e.target.value === "true" } });
+                }}
+              >
+                <option value="false">false</option>
+                <option value="true">true</option>
+              </select>
+            </div>
+            <div className="row tight" style={{ margin: 0 }}>
+              <label>Repo actions</label>
+              <select
+                value={String(agentForm.toolPolicy.allowRepoActions)}
+                onChange={(e) => {
+                  isAgentDirtyRef.current = true;
+                  setAgentForm({ ...agentForm, toolPolicy: { ...agentForm.toolPolicy, allowRepoActions: e.target.value === "true" } });
+                }}
               >
                 <option value="false">false</option>
                 <option value="true">true</option>
@@ -339,6 +355,19 @@ export function App() {
           </div>
 
           <div className="split">
+            <div className="row tight" style={{ margin: 0 }}>
+              <label>Run tests</label>
+              <select
+                value={String(agentForm.toolPolicy.allowRunTests)}
+                onChange={(e) => {
+                  isAgentDirtyRef.current = true;
+                  setAgentForm({ ...agentForm, toolPolicy: { ...agentForm.toolPolicy, allowRunTests: e.target.value === "true" } });
+                }}
+              >
+                <option value="false">false</option>
+                <option value="true">true</option>
+              </select>
+            </div>
             <div className="row tight" style={{ margin: 0 }}>
               <label>Max tokens</label>
               <input

@@ -4,6 +4,19 @@ import { tryClaimIssue } from "../claim/claimIssue.js";
 import { ApiClient } from "../api/ApiClient.js";
 import { AnthropicClient } from "../llm/AnthropicClient.js";
 import { env } from "../env.js";
+import { CodeChangeRunner } from "../repo/CodeChangeRunner.js";
+
+type ExecutionMode = "research" | "code_change";
+
+function decideExecutionMode(agent: AgentConfig, issue: { fields: { summary?: string; description?: unknown } }): ExecutionMode {
+  // v1 rules:
+  // - If repo actions are allowed, prefer code changes unless ticket explicitly asks for research.
+  // - Otherwise fall back to research (if allowed) or skip.
+  const text = `${issue.fields.summary ?? ""}\n${JSON.stringify(issue.fields.description ?? "")}`.toLowerCase();
+  const wantsResearch = /\bresearch\b|\binvestigate\b|\bspike\b|\brfc\b/.test(text);
+  if (agent.toolPolicy.allowRepoActions && !wantsResearch) return "code_change";
+  return "research";
+}
 
 export type OrchestratorDeps = {
   api: ApiClient;
@@ -87,9 +100,14 @@ export class Orchestrator {
     );
     await this.deps.api.audit(runId, issueRunId, "plan_posted", { issueKey });
 
-    // Execute: Research mode (Anthropic) when enabled.
-    if (agent.toolPolicy.allowWebResearch) {
-      if (!env.ANTHROPIC_API_KEY) {
+    // Execute: decide research vs code changes
+    const mode = decideExecutionMode(agent, issue);
+    await this.deps.api.audit(runId, issueRunId, "execution_mode_selected", { issueKey, mode });
+
+    if (mode === "research") {
+      if (!agent.toolPolicy.allowWebResearch) {
+        await this.deps.api.audit(runId, issueRunId, "execute_skipped", { reason: "allowWebResearch=false" });
+      } else if (!env.ANTHROPIC_API_KEY) {
         await this.deps.jira.addComment(issueKey, "Research is enabled but `ANTHROPIC_API_KEY` is not set on the worker.");
         await this.deps.api.audit(runId, issueRunId, "research_failed", { reason: "missing_anthropic_api_key" });
       } else {
@@ -118,10 +136,6 @@ export class Orchestrator {
           "Clarifying_questions",
           "Sources",
           "",
-          "Sources rules:",
-          "- Provide 6–12 high-quality sources to read next (title + what it covers).",
-          "- If you can’t verify a specific URL, provide the canonical doc/paper name and what to search for.",
-          "",
           `Ticket_title: ${issue.fields.summary ?? issueKey}`,
           `Ticket_description_json: ${descriptionText}`
         ].join("\n");
@@ -136,23 +150,104 @@ export class Orchestrator {
           await this.deps.api.audit(runId, issueRunId, "research_posted", { model, chars: research.length });
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
-          let modelsHint = "";
-          try {
-            const models = await llm.listModels();
-            modelsHint = ["", "Available_models:", ...models.slice(0, 30).map((m) => `- ${m}`)].join("\n");
-          } catch {
-            // ignore
-          }
-          await this.deps.jira.addComment(issueKey, ["## Research (agent) failed", "", msg, modelsHint].join("\n"));
+          await this.deps.jira.addComment(issueKey, ["## Research (agent) failed", "", msg].join("\n"));
           await this.deps.api.audit(runId, issueRunId, "research_failed", { model, error: msg });
         }
       }
-    } else {
-      await this.deps.api.audit(runId, issueRunId, "execute_skipped", { reason: "allowWebResearch=false" });
+    }
+
+    if (mode === "code_change") {
+      if (!agent.toolPolicy.allowRepoActions) {
+        await this.deps.api.audit(runId, issueRunId, "code_change_skipped", { reason: "allowRepoActions=false" });
+      } else if (!env.ANTHROPIC_API_KEY) {
+        await this.deps.jira.addComment(issueKey, "Code changes are enabled but `ANTHROPIC_API_KEY` is not set on the worker.");
+        await this.deps.api.audit(runId, issueRunId, "code_change_failed", { reason: "missing_anthropic_api_key" });
+      } else {
+        const model = agent.llmPolicy.model || "claude-sonnet";
+        const llm = new AnthropicClient(env.ANTHROPIC_API_KEY, model, env.ANTHROPIC_BASE_URL);
+
+        const repoRoot = env.REPO_ROOT ?? process.cwd();
+        const runner = new CodeChangeRunner({ repoRoot });
+        await runner.ensureCleanOrThrow();
+        const branch = await runner.createBranch(issueKey);
+
+        const desc = JSON.stringify(issue.fields.description ?? "");
+        const patchPrompt = [
+          "You are a senior software engineer. Based only on the Jira ticket text, produce a single unified diff patch to implement the requested change in this repository.",
+          "",
+          "Constraints:",
+          "- Output ONLY a unified diff patch (no markdown fences, no commentary).",
+          "- The patch must apply with `git apply`.",
+          "- If you cannot implement safely, output an empty patch (no changes).",
+          "",
+          `Ticket_key: ${issueKey}`,
+          `Ticket_title: ${issue.fields.summary ?? ""}`,
+          `Ticket_description_json: ${desc}`
+        ].join("\n");
+
+        let patch = "";
+        try {
+          patch = await llm.generateText(patchPrompt, { maxTokens: 2500, temperature: 0.2 });
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          await this.deps.jira.addComment(issueKey, ["## Code change (agent) failed", "", msg].join("\n"));
+          await this.deps.api.audit(runId, issueRunId, "code_change_failed", { model, error: msg });
+          patch = "";
+        }
+
+        try {
+          if (patch.trim()) {
+            await runner.applyPatch(patch);
+          }
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          await this.deps.jira.addComment(issueKey, ["## Patch apply failed", "", msg].join("\n"));
+          await this.deps.api.audit(runId, issueRunId, "patch_apply_failed", { error: msg, branch });
+        }
+
+        await runner.ensureNonEmptyCommit(
+          issueKey,
+          [
+            "# Agent output",
+            "",
+            "This PR was created by the worker in code-change mode.",
+            "",
+            "If no patch was applied, this file exists so the PR is not empty.",
+            "",
+            `Issue: ${issueKey}`,
+            `Branch: ${branch}`
+          ].join("\n")
+        );
+
+        if (agent.toolPolicy.allowRunTests) {
+          try {
+            await runner.maybeRunTests(env.RUN_TESTS_COMMAND);
+            await this.deps.api.audit(runId, issueRunId, "tests_ran", { command: env.RUN_TESTS_COMMAND ?? null });
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            await this.deps.jira.addComment(issueKey, ["## Tests failed (agent)", "", msg].join("\n"));
+            await this.deps.api.audit(runId, issueRunId, "tests_failed", { error: msg });
+          }
+        }
+
+        const sha = await runner.commitAll(issueKey);
+        const pr = await runner.createPr({
+          issueKey,
+          title: `${issueKey}: ${issue.fields.summary ?? "Agent changes"}`,
+          body: ["## Summary", "- Automated changes by RATIFAI worker.", "", "## Test plan", "- (if configured) ran worker test command.", ""].join(
+            "\n"
+          ),
+          baseBranch: env.PR_BASE_BRANCH,
+          remote: env.PR_REMOTE
+        });
+
+        await this.deps.jira.addComment(issueKey, ["## PR created (agent)", "", pr.prUrl].join("\n"));
+        await this.deps.api.audit(runId, issueRunId, "pr_created", { prUrl: pr.prUrl, branch: pr.branch, sha, commitSha: pr.commitSha });
+      }
     }
 
     // Report
-    await this.deps.api.audit(runId, issueRunId, "report_posted", { issueKey, note: "Research mode posts its own comment." });
+    await this.deps.api.audit(runId, issueRunId, "report_posted", { issueKey });
 
     // Transition In-Progress -> Ready for review
     if (!agent.safetyPolicy.dryRun) {

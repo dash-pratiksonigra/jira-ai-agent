@@ -10,6 +10,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
     "@ratifai/shared": "0.1.0",
     "dotenv": "^16.0.0"
   },
