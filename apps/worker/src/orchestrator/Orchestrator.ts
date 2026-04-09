@@ -18,6 +18,20 @@ function decideExecutionMode(agent: AgentConfig, issue: { fields: { summary?: st
   return "research";
 }
 
+function sanitizeUnifiedDiff(raw: string): string {
+  const t = raw.trim();
+  if (!t) return "";
+
+  // If the model wrapped output in a code fence, extract the inside.
+  const fence = t.match(/```(?:diff|patch|text)?\s*([\s\S]*?)\s*```/i);
+  const inner = fence?.[1]?.trim();
+  const candidate = inner && inner.includes("diff --git") ? inner : t;
+
+  // Drop any leading non-diff chatter.
+  const idx = candidate.indexOf("diff --git");
+  return idx >= 0 ? candidate.slice(idx).trim() : "";
+}
+
 export type OrchestratorDeps = {
   api: ApiClient;
   jira: JiraAdapter;
@@ -185,8 +199,12 @@ export class Orchestrator {
         const branch = await runner.createBranch(issueKey);
 
         const desc = JSON.stringify(issue.fields.description ?? "");
-        const patchPrompt = [
+        const patchPromptBase = [
           "You are a senior software engineer. Based only on the Jira ticket text, produce a single PATCH that can be applied with `git apply`.",
+          "",
+          "Repository context:",
+          "- This is a monorepo. Top-level folders include `apps/api`, `apps/ui`, `apps/worker`, and `packages/shared`.",
+          "- Do NOT add files under `src/...` unless that path already exists in this repo. Prefer existing app/package paths.",
           "",
           "Output rules (STRICT):",
           "- Output ONLY the patch text. No markdown fences. No explanation.",
@@ -213,7 +231,31 @@ export class Orchestrator {
 
         let patch = "";
         try {
-          patch = await llm.generateText(patchPrompt, { maxTokens: 2500, temperature: 0.2 });
+          // Retry once if patch is malformed / cannot be applied.
+          let lastApplyErr = "";
+          for (let attempt = 0; attempt < 2; attempt++) {
+            const prompt =
+              attempt === 0
+                ? patchPromptBase
+                : [
+                    patchPromptBase,
+                    "",
+                    "The previous patch failed `git apply` with this error. Fix the patch format/paths and output a corrected unified diff patch only:",
+                    lastApplyErr
+                  ].join("\n");
+
+            patch = sanitizeUnifiedDiff(await llm.generateText(prompt, { maxTokens: 3000, temperature: 0.2 }));
+            if (!patch) break;
+
+            try {
+              await runner.applyPatch(patch);
+              lastApplyErr = "";
+              break;
+            } catch (e) {
+              lastApplyErr = e instanceof Error ? e.message : String(e);
+              if (attempt === 1) throw e;
+            }
+          }
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
           await this.deps.jira.addComment(issueKey, ["## Code change (agent) failed", "", msg].join("\n"));
@@ -221,14 +263,16 @@ export class Orchestrator {
           patch = "";
         }
 
-        try {
-          if (patch.trim()) {
-            await runner.applyPatch(patch);
-          }
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
-          await this.deps.jira.addComment(issueKey, ["## Patch apply failed", "", msg].join("\n"));
+        if (patch.trim() && !/diff --git a\//.test(patch)) {
+          // Extremely defensive: ensure patch looks like a unified diff before continuing.
+          const msg = "Generated patch did not contain `diff --git` headers after sanitation.";
           await this.deps.api.audit(runId, issueRunId, "patch_apply_failed", { error: msg, branch });
+          await this.deps.jira.addComment(issueKey, ["## Patch apply failed", "", msg].join("\n"));
+          patch = "";
+        }
+
+        if (!patch.trim()) {
+          await this.deps.api.audit(runId, issueRunId, "patch_skipped", { reason: "empty_or_unsalvageable_patch", branch });
         }
 
         await runner.ensureNonEmptyCommit(
