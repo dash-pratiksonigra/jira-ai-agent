@@ -65,12 +65,25 @@ export class Orchestrator {
 
     // Transition To-do -> In-Progress
     if (!agent.safetyPolicy.dryRun) {
-      await this.deps.jira.transitionIssue(issueKey, agent.workflowMapping.todoToInProgressTransitionId);
-      await this.deps.api.audit(runId, issueRunId, "transition", {
-        issueKey,
-        to: agent.workflowMapping.inProgressStatus,
-        transitionId: agent.workflowMapping.todoToInProgressTransitionId
-      });
+      try {
+        await this.deps.jira.transitionIssue(issueKey, agent.workflowMapping.todoToInProgressTransitionId);
+        await this.deps.api.audit(runId, issueRunId, "transition", {
+          issueKey,
+          to: agent.workflowMapping.inProgressStatus,
+          transitionId: agent.workflowMapping.todoToInProgressTransitionId
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        await this.deps.api.audit(runId, issueRunId, "transition_failed", {
+          issueKey,
+          transitionId: agent.workflowMapping.todoToInProgressTransitionId,
+          error: msg
+        });
+        await this.deps.jira.addComment(
+          issueKey,
+          ["## Transition failed (agent)", "", `Could not transition to '${agent.workflowMapping.inProgressStatus}'.`, "", msg].join("\n")
+        );
+      }
     } else {
       await this.deps.api.audit(runId, issueRunId, "dry_run_transition_skipped", {
         issueKey,
@@ -173,12 +186,25 @@ export class Orchestrator {
 
         const desc = JSON.stringify(issue.fields.description ?? "");
         const patchPrompt = [
-          "You are a senior software engineer. Based only on the Jira ticket text, produce a single unified diff patch to implement the requested change in this repository.",
+          "You are a senior software engineer. Based only on the Jira ticket text, produce a single PATCH that can be applied with `git apply`.",
           "",
-          "Constraints:",
-          "- Output ONLY a unified diff patch (no markdown fences, no commentary).",
-          "- The patch must apply with `git apply`.",
-          "- If you cannot implement safely, output an empty patch (no changes).",
+          "Output rules (STRICT):",
+          "- Output ONLY the patch text. No markdown fences. No explanation.",
+          "- The patch MUST be a valid unified diff that starts with one or more `diff --git a/... b/...` headers.",
+          "- Every file MUST include the `---` and `+++` lines and at least one `@@` hunk (unless it's a pure mode change).",
+          "- For new files, include `new file mode 100644` and `--- /dev/null`.",
+          "- Do NOT include any lines like `++ b/path` (invalid). Use `+++ b/path` only after a matching `---` line.",
+          "- Use correct paths relative to repo root (e.g. `apps/worker/src/...`).",
+          "- If you are unsure about paths or cannot implement safely, output an EMPTY string (no changes).",
+          "",
+          "Minimal example (format only; do not copy paths blindly):",
+          "diff --git a/README.md b/README.md",
+          "index 1111111..2222222 100644",
+          "--- a/README.md",
+          "+++ b/README.md",
+          "@@ -1,1 +1,2 @@",
+          " Hello",
+          "+World",
           "",
           `Ticket_key: ${issueKey}`,
           `Ticket_title: ${issue.fields.summary ?? ""}`,
@@ -251,12 +277,25 @@ export class Orchestrator {
 
     // Transition In-Progress -> Ready for review
     if (!agent.safetyPolicy.dryRun) {
-      await this.deps.jira.transitionIssue(issueKey, agent.workflowMapping.inProgressToReadyForReviewTransitionId);
-      await this.deps.api.audit(runId, issueRunId, "transition", {
-        issueKey,
-        to: agent.workflowMapping.readyForReviewStatus,
-        transitionId: agent.workflowMapping.inProgressToReadyForReviewTransitionId
-      });
+      try {
+        await this.deps.jira.transitionIssue(issueKey, agent.workflowMapping.inProgressToReadyForReviewTransitionId);
+        await this.deps.api.audit(runId, issueRunId, "transition", {
+          issueKey,
+          to: agent.workflowMapping.readyForReviewStatus,
+          transitionId: agent.workflowMapping.inProgressToReadyForReviewTransitionId
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        await this.deps.api.audit(runId, issueRunId, "transition_failed", {
+          issueKey,
+          transitionId: agent.workflowMapping.inProgressToReadyForReviewTransitionId,
+          error: msg
+        });
+        await this.deps.jira.addComment(
+          issueKey,
+          ["## Transition failed (agent)", "", `Could not transition to '${agent.workflowMapping.readyForReviewStatus}'.`, "", msg].join("\n")
+        );
+      }
     } else {
       await this.deps.api.audit(runId, issueRunId, "dry_run_transition_skipped", {
         issueKey,

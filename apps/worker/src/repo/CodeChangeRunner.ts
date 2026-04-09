@@ -37,6 +37,17 @@ export class CodeChangeRunner {
   }
 
   async applyPatch(patchText: string) {
+    const trimmed = patchText.trim();
+    if (!trimmed) throw new Error("Empty patch");
+    if (!/^diff --git a\//m.test(trimmed)) {
+      throw new Error("Invalid patch: missing `diff --git a/... b/...` headers");
+    }
+    if (!/^--- /m.test(trimmed) || !/^\+\+\+ /m.test(trimmed)) {
+      throw new Error("Invalid patch: missing `---` / `+++` file markers");
+    }
+    if (!/^@@/m.test(trimmed)) {
+      throw new Error("Invalid patch: missing `@@` hunks");
+    }
     const dir = path.join(this.opts.repoRoot, ".ratifai");
     await fs.mkdir(dir, { recursive: true });
     const patchPath = path.join(dir, `patch-${Date.now()}.patch`);
@@ -44,6 +55,16 @@ export class CodeChangeRunner {
     // --whitespace=fix is a pragmatic default for LLM-generated diffs.
     await this.repo.git(["apply", "--whitespace=fix", patchPath], { timeoutMs: 60_000 });
     return patchPath;
+  }
+
+  async cleanScratch() {
+    // Ensure scratch artifacts never get committed.
+    const dir = path.join(this.opts.repoRoot, ".ratifai");
+    try {
+      await fs.rm(dir, { recursive: true, force: true });
+    } catch {
+      // ignore
+    }
   }
 
   async ensureNonEmptyCommit(issueKey: string, body: string) {
@@ -65,6 +86,7 @@ export class CodeChangeRunner {
   }
 
   async commitAll(issueKey: string) {
+    await this.cleanScratch();
     await this.repo.git(["add", "-A"]);
     try {
       await this.repo.git(["commit", "-m", `feat: ${issueKey} (agent)`]);

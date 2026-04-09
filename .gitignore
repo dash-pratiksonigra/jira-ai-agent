@@ -24,6 +24,10 @@ pnpm-debug.log*
 .atlassian-mcp-oauth.json
 **/.atlassian-mcp-oauth.json
 
+## worker scratch (never commit)
+.ratifai/
+**/.ratifai/
+
 ## local data / databases
 data/*.db
 data/**/*.db
