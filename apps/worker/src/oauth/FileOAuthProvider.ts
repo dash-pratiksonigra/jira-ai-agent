@@ -110,9 +110,7 @@ export class FileOAuthProvider implements OAuthClientProvider {
     // Provide a clear instruction to run the interactive login script.
     // eslint-disable-next-line no-console
     console.log("Open this URL to authorize Atlassian MCP:", authorizationUrl.toString());
-    throw new Error(
-      "OAuth authorization required. Run `node apps/worker/dist/mcpOauthLogin.js` once to complete OAuth, then restart the worker."
-    );
+    // Do not throw here; the SDK will raise an UnauthorizedError from connect/start.
   }
 }
 
