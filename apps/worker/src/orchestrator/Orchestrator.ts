@@ -32,6 +32,35 @@ function sanitizeUnifiedDiff(raw: string): string {
   return idx >= 0 ? candidate.slice(idx).trim() : "";
 }
 
+function validateUnifiedDiffOrThrow(patch: string) {
+  const t = patch.trim();
+  if (!t) throw new Error("Empty patch");
+
+  if (t.includes("```")) throw new Error("Invalid patch: contains markdown code fences");
+  if (!t.startsWith("diff --git ")) throw new Error("Invalid patch: must start with `diff --git`");
+  if (!/\n--- (?:a\/|\/dev\/null)\S*/.test(t)) throw new Error("Invalid patch: missing `--- a/...` or `--- /dev/null`");
+  if (!/\n\+\+\+ b\/\S+/.test(t)) throw new Error("Invalid patch: missing `+++ b/...`");
+  if (!/\n@@ /.test(t)) throw new Error("Invalid patch: missing `@@` hunks");
+  if (/(^|\n)\+\+ b\//.test(t)) throw new Error("Invalid patch: contains `++ b/...` (should be `+++ b/...`)");
+  if (/(^|\n)-- a\//.test(t)) throw new Error("Invalid patch: contains `-- a/...` (should be `--- a/...`)");
+
+  // Ensure sections are separated with `diff --git`, not only `---/+++` blocks.
+  const lines = t.split(/\r?\n/);
+  let sawDiff = false;
+  for (const line of lines) {
+    if (line.startsWith("diff --git ")) {
+      sawDiff = true;
+      continue;
+    }
+    if (!sawDiff) throw new Error("Invalid patch: content appears before first `diff --git`");
+  }
+}
+
+function issueHasLabel(issue: { fields: { labels?: string[] | null } }, label: string): boolean {
+  const labels = issue.fields.labels ?? [];
+  return labels.includes(label);
+}
+
 export type OrchestratorDeps = {
   api: ApiClient;
   jira: JiraAdapter;
@@ -46,8 +75,16 @@ export class Orchestrator {
 
     try {
       const search = await this.deps.jira.search(agent.jql, agent.safetyPolicy.maxIssuesPerRun);
-      const candidates = search.issues.map((i) => i.key);
-      await this.deps.api.audit(runId, undefined, "jira_search", { jql: agent.jql, candidates });
+      // Only pick issues that are explicitly labeled for AI handling.
+      const requiredLabel = "ai";
+      const labeled = search.issues.filter((i) => issueHasLabel(i, requiredLabel));
+      const candidates = labeled.map((i) => i.key);
+      await this.deps.api.audit(runId, undefined, "jira_search", {
+        jql: agent.jql,
+        requiredLabel,
+        totalFound: search.issues.length,
+        candidates
+      });
 
       for (const issueKey of candidates) {
         const claimRes = await tryClaimIssue(this.deps.jira, agent, issueKey);
@@ -200,19 +237,23 @@ export class Orchestrator {
 
         const desc = JSON.stringify(issue.fields.description ?? "");
         const patchPromptBase = [
-          "You are a senior software engineer. Based only on the Jira ticket text, produce a single PATCH that can be applied with `git apply`.",
+          "You are a senior software engineer working in an existing monorepo. Based only on the Jira ticket text, output ONE unified-diff patch that can be applied with `git apply`.",
           "",
           "Repository context:",
           "- This is a monorepo. Top-level folders include `apps/api`, `apps/ui`, `apps/worker`, and `packages/shared`.",
-          "- Do NOT add files under `src/...` unless that path already exists in this repo. Prefer existing app/package paths.",
+          "- Do NOT create files under a top-level `src/` folder unless it already exists in THIS repo.",
+          "- Prefer paths under `apps/ui/src/...`, `apps/api/src/...`, `apps/worker/src/...`, or `packages/shared/src/...`.",
+          "- If you are unsure about the correct location, choose the most likely existing app/package (usually `apps/ui/src/...` for frontend UI changes).",
           "",
           "Output rules (STRICT):",
-          "- Output ONLY the patch text. No markdown fences. No explanation.",
-          "- The patch MUST be a valid unified diff that starts with one or more `diff --git a/... b/...` headers.",
-          "- Every file MUST include the `---` and `+++` lines and at least one `@@` hunk (unless it's a pure mode change).",
-          "- For new files, include `new file mode 100644` and `--- /dev/null`.",
-          "- Do NOT include any lines like `++ b/path` (invalid). Use `+++ b/path` only after a matching `---` line.",
-          "- Use correct paths relative to repo root (e.g. `apps/worker/src/...`).",
+          "- Output ONLY the patch text. No explanations. No markdown fences. No headings.",
+          "- The patch MUST be a valid unified diff produced by `git diff` style output.",
+          "- Every file change MUST start with `diff --git a/<path> b/<path>`.",
+          "- For new files, include: `new file mode 100644`, an `index ...` line, `--- /dev/null`, `+++ b/<path>`, and at least one `@@` hunk.",
+          "- For modified files, include: an `index ...` line, `--- a/<path>`, `+++ b/<path>`, and at least one `@@` hunk.",
+          "- Inside hunks, every line MUST begin with exactly one of: space, `+`, or `-`.",
+          "- Do NOT include any lines like `++ b/path` (invalid) or `-- a/path` (invalid).",
+          "- Use correct paths relative to repo root (e.g. `apps/ui/src/...`).",
           "- If you are unsure about paths or cannot implement safely, output an EMPTY string (no changes).",
           "",
           "Minimal example (format only; do not copy paths blindly):",
@@ -240,7 +281,14 @@ export class Orchestrator {
                 : [
                     patchPromptBase,
                     "",
-                    "The previous patch failed `git apply` with this error. Fix the patch format/paths and output a corrected unified diff patch only:",
+                    "The previous patch failed `git apply`. Fix the patch so it is a valid unified diff and so it uses correct repo-relative paths for THIS monorepo.",
+                    "",
+                    "Hard requirements for the corrected patch:",
+                    "- Every file block MUST begin with `diff --git a/... b/...`.",
+                    "- New files MUST include `new file mode 100644`, `--- /dev/null`, `+++ b/...`, and at least one `@@` hunk.",
+                    "- Output ONLY the patch text. No markdown fences.",
+                    "",
+                    "git apply error:",
                     lastApplyErr
                   ].join("\n");
 
@@ -248,6 +296,7 @@ export class Orchestrator {
             if (!patch) break;
 
             try {
+              validateUnifiedDiffOrThrow(patch);
               await runner.applyPatch(patch);
               lastApplyErr = "";
               break;
