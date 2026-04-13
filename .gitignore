@@ -28,6 +28,10 @@ pnpm-debug.log*
 .ratifai/
 **/.ratifai/
 
+## agent output scratch (never commit)
+agent-output/
+**/agent-output/
+
 ## local data / databases
 data/*.db
 data/**/*.db

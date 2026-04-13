@@ -233,7 +233,6 @@ export class Orchestrator {
         const repoRoot = env.REPO_ROOT ?? process.cwd();
         const runner = new CodeChangeRunner({ repoRoot });
         await runner.ensureCleanOrThrow();
-        const branch = await runner.createBranch(issueKey);
 
         const desc = JSON.stringify(issue.fields.description ?? "");
         const patchPromptBase = [
@@ -271,6 +270,7 @@ export class Orchestrator {
         ].join("\n");
 
         let patch = "";
+        let branch: string | null = null;
         try {
           // Retry once if patch is malformed / cannot be applied.
           let lastApplyErr = "";
@@ -294,6 +294,9 @@ export class Orchestrator {
 
             patch = sanitizeUnifiedDiff(await llm.generateText(prompt, { maxTokens: 3000, temperature: 0.2 }));
             if (!patch) break;
+
+            // Only create a branch if we have a non-empty patch to try.
+            if (!branch) branch = await runner.createBranch(issueKey);
 
             try {
               validateUnifiedDiffOrThrow(patch);
@@ -322,21 +325,18 @@ export class Orchestrator {
 
         if (!patch.trim()) {
           await this.deps.api.audit(runId, issueRunId, "patch_skipped", { reason: "empty_or_unsalvageable_patch", branch });
+          await this.deps.jira.addComment(
+            issueKey,
+            [
+              "## No code changes generated (agent)",
+              "",
+              "I couldn’t produce a patch I can safely apply from the current ticket text, so I’m not opening a PR.",
+              "",
+              "Please add missing details (expected behavior, file locations, acceptance criteria) and I’ll retry."
+            ].join("\n")
+          );
+          return;
         }
-
-        await runner.ensureNonEmptyCommit(
-          issueKey,
-          [
-            "# Agent output",
-            "",
-            "This PR was created by the worker in code-change mode.",
-            "",
-            "If no patch was applied, this file exists so the PR is not empty.",
-            "",
-            `Issue: ${issueKey}`,
-            `Branch: ${branch}`
-          ].join("\n")
-        );
 
         if (agent.toolPolicy.allowRunTests) {
           try {

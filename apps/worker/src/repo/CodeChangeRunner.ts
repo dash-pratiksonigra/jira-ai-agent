@@ -67,13 +67,9 @@ export class CodeChangeRunner {
     }
   }
 
-  async ensureNonEmptyCommit(issueKey: string, body: string) {
+  async hasWorkingTreeChanges(): Promise<boolean> {
     const { stdout } = await this.repo.git(["status", "--porcelain"]);
-    if (stdout.trim()) return;
-    const outDir = path.join(this.opts.repoRoot, "agent-output");
-    await fs.mkdir(outDir, { recursive: true });
-    const p = path.join(outDir, `${issueKey}.md`);
-    await fs.writeFile(p, body, "utf8");
+    return Boolean(stdout.trim());
   }
 
   async maybeRunTests(commandLine?: string) {
@@ -88,17 +84,7 @@ export class CodeChangeRunner {
   async commitAll(issueKey: string) {
     await this.cleanScratch();
     await this.repo.git(["add", "-A"]);
-    try {
-      await this.repo.git(["commit", "-m", `feat: ${issueKey} (agent)`]);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      // If there is nothing to commit, create an empty commit so PR creation has a diff.
-      if (msg.includes("nothing to commit") || msg.includes("working tree clean")) {
-        await this.repo.git(["commit", "--allow-empty", "-m", `chore: ${issueKey} (agent)`]);
-      } else {
-        throw e;
-      }
-    }
+    await this.repo.git(["commit", "-m", `feat: ${issueKey} (agent)`]);
     const { stdout } = await this.repo.git(["rev-parse", "HEAD"]);
     return stdout.trim();
   }
