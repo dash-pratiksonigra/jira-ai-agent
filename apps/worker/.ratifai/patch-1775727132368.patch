@@ -1,0 +1,262 @@
+--- /dev/null
++++ b/src/pages/Login.jsx
+@@ -0,0 +1,98 @@
++import { useState } from 'react';
++import { useNavigate } from 'react-router-dom';
++import { useAuth } from '../context/AuthContext';
++
++export default function Login() {
++  const [email, setEmail] = useState('');
++  const [password, setPassword] = useState('');
++  const [error, setError] = useState('');
++  const [loading, setLoading] = useState(false);
++  const { login } = useAuth();
++  const navigate = useNavigate();
++
++  const handleSubmit = async (e) => {
++    e.preventDefault();
++    setError('');
++    setLoading(true);
++    try {
++      await login(email, password);
++      navigate('/dashboard', { replace: true });
++    } catch (err) {
++      setError(err.message || 'Invalid email or password. Please try again.');
++    } finally {
++      setLoading(false);
++    }
++  };
++
++  return (
++    <div className="login-page">
++      <div className="login-card">
++        <h1>Sign In</h1>
++        <form onSubmit={handleSubmit} noValidate>
++          {error && (
++            <div className="error-message" role="alert">
++              {error}
++            </div>
++          )}
++          <div className="form-group">
++            <label htmlFor="email">Email</label>
++            <input
++              id="email"
++              type="email"
++              value={email}
++              onChange={(e) => setEmail(e.target.value)}
++              required
++              autoComplete="email"
++              placeholder="you@example.com"
++            />
++          </div>
++          <div className="form-group">
++            <label htmlFor="password">Password</label>
++            <input
++              id="password"
++              type="password"
++              value={password}
++              onChange={(e) => setPassword(e.target.value)}
++              required
++              autoComplete="current-password"
++              placeholder="••••••••"
++            />
++          </div>
++          <button type="submit" disabled={loading} className="btn-primary">
++            {loading ? 'Signing in…' : 'Login'}
++          </button>
++        </form>
++      </div>
++    </div>
++  );
++}
+--- /dev/null
++++ b/src/pages/Dashboard.jsx
+@@ -0,0 +1,24 @@
++import { useNavigate } from 'react-router-dom';
++import { useAuth } from '../context/AuthContext';
++
++export default function Dashboard() {
++  const { user, logout } = useAuth();
++  const navigate = useNavigate();
++
++  const handleLogout = async () => {
++    await logout();
++    navigate('/login', { replace: true });
++  };
++
++  return (
++    <div className="dashboard-page">
++      <header className="dashboard-header">
++        <h1>Dashboard</h1>
++        <button onClick={handleLogout} className="btn-secondary">
++          Logout
++        </button>
++      </header>
++      <p>Welcome{user?.email ? `, ${user.email}` : ''}!</p>
++    </div>
++  );
++}
+--- /dev/null
++++ b/src/context/AuthContext.jsx
+@@ -0,0 +1,60 @@
++import { createContext, useContext, useState, useEffect } from 'react';
++
++const AuthContext = createContext(null);
++
++const SESSION_KEY = 'auth_user';
++
++/**
++ * Simulated credential check.
++ * Replace with a real API call (e.g. POST /api/auth/login) as needed.
++ */
++async function authenticate(email, password) {
++  // Simulate network latency
++  await new Promise((r) => setTimeout(r, 400));
++  if (email === 'user@example.com' && password === 'password') {
++    return { email };
++  }
++  throw new Error('Invalid email or password. Please try again.');
++}
++
++export function AuthProvider({ children }) {
++  const [user, setUser] = useState(() => {
++    try {
++      const stored = sessionStorage.getItem(SESSION_KEY);
++      return stored ? JSON.parse(stored) : null;
++    } catch {
++      return null;
++    }
++  });
++
++  useEffect(() => {
++    if (user) {
++      sessionStorage.setItem(SESSION_KEY, JSON.stringify(user));
++    } else {
++      sessionStorage.removeItem(SESSION_KEY);
++    }
++  }, [user]);
++
++  const login = async (email, password) => {
++    const authenticatedUser = await authenticate(email, password);
++    setUser(authenticatedUser);
++    return authenticatedUser;
++  };
++
++  const logout = async () => {
++    setUser(null);
++  };
++
++  return (
++    <AuthContext.Provider value={{ user, login, logout }}>
++      {children}
++    </AuthContext.Provider>
++  );
++}
++
++export function useAuth() {
++  const ctx = useContext(AuthContext);
++  if (!ctx) {
++    throw new Error('useAuth must be used within an AuthProvider');
++  }
++  return ctx;
++}
+--- /dev/null
++++ b/src/components/ProtectedRoute.jsx
+@@ -0,0 +1,12 @@
++import { Navigate, Outlet } from 'react-router-dom';
++import { useAuth } from '../context/AuthContext';
++
++export default function ProtectedRoute() {
++  const { user } = useAuth();
++
++  if (!user) {
++    return <Navigate to="/login" replace />;
++  }
++
++  return <Outlet />;
++}
+--- /dev/null
++++ b/src/App.jsx
+@@ -0,0 +1,27 @@
++import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
++import { AuthProvider } from './context/AuthContext';
++import ProtectedRoute from './components/ProtectedRoute';
++import Login from './pages/Login';
++import Dashboard from './pages/Dashboard';
++
++export default function App() {
++  return (
++    <BrowserRouter>
++      <AuthProvider>
++        <Routes>
++          <Route path="/login" element={<Login />} />
++          <Route element={<ProtectedRoute />}>
++            <Route path="/dashboard" element={<Dashboard />} />
++          </Route>
++          <Route path="*" element={<Navigate to="/dashboard" replace />} />
++        </Routes>
++      </AuthProvider>
++    </BrowserRouter>
++  );
++}
+--- /dev/null
++++ b/src/pages/Login.test.jsx
+@@ -0,0 +1,96 @@
++import { render, screen, fireEvent, waitFor } from '@testing-library/react';
++import { MemoryRouter, Routes, Route } from 'react-router-dom';
++import { AuthProvider } from '../context/AuthContext';
++import Login from './Login';
++import Dashboard from './Dashboard';
++
++function renderLogin() {
++  return render(
++    <MemoryRouter initialEntries={['/login']}>
++      <AuthProvider>
++        <Routes>
++          <Route path="/login" element={<Login />} />
++          <Route path="/dashboard" element={<Dashboard />} />
++        </Routes>
++      </AuthProvider>
++    </MemoryRouter>
++  );
++}
++
++describe('Login page', () => {
++  it('renders email and password fields and a login button', () => {
++    renderLogin();
++    expect(screen.getByLabelText(/email/i)).toBeInTheDocument();
++    expect(screen.getByLabelText(/password/i)).toBeInTheDocument();
++    expect(screen.getByRole('button', { name: /login/i })).toBeInTheDocument();
++  });
++
++  it('redirects to dashboard on valid credentials', async () => {
++    renderLogin();
++    fireEvent.change(screen.getByLabelText(/email/i), {
++      target: { value: 'user@example.com' },
++    });
++    fireEvent.change(screen.getByLabelText(/password/i), {
++      target: { value: 'password' },
++    });
++    fireEvent.click(screen.getByRole('button', { name: /login/i }));
++    await waitFor(() => {
++      expect(screen.getByText(/dashboard/i)).toBeInTheDocument();
++    });
++  });
++
++  it('shows an error message on invalid credentials', async () => {
++    renderLogin();
++    fireEvent.change(screen.getByLabelText(/email/i), {
++      target: { value: 'wrong@example.com' },
++    });
++    fireEvent.change(screen.getByLabelText(/password/i), {
++      target: { value: 'wrongpassword' },
++    });
++    fireEvent.click(screen.getByRole('button', { name: /login/i }));
++    await waitFor(() => {
++      expect(
++        screen.getByText(/invalid email or password/i)
++      ).toBeInTheDocument();
++    });
++  });
++});
+---
